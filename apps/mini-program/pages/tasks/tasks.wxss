@@ -1,0 +1,4 @@
+.section-title { display: flex; justify-content: space-between; align-items: baseline; margin: 8rpx 0 24rpx; }.section-title text { font-size: 36rpx; font-weight: 800; }.section-title small { color: #8ba0a2; font-size: 21rpx; }
+.task-head, .task-foot { display: flex; justify-content: space-between; align-items: center; }.task-no { font-size: 28rpx; font-weight: 800; }.task .muted { display: block; margin: 20rpx 0; }.task-foot { padding-top: 18rpx; border-top: 1rpx solid #edf1ef; color: #286d70; font-size: 24rpx; font-weight: 700; }
+.empty { padding: 120rpx 20rpx; color: #789092; text-align: center; }.empty text, .empty small { display: block; }.empty small { margin-top: 14rpx; color: #a4b1b2; font-size: 22rpx; }.error { margin-bottom: 20rpx; padding: 20rpx; border-radius: 12rpx; background: #fff0ee; color: #a14a3e; }
+

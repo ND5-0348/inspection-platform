@@ -1,0 +1,17 @@
+<view class="page">
+  <view class="welcome">
+    <text class="eyebrow">FIELD INSPECTION</text>
+    <text class="title">{{name}}，今天辛苦了</text>
+    <text class="subtitle">请在现场按系统指引完成签到、随机抽样和证据采集。</text>
+  </view>
+  <view class="metric-row">
+    <view class="metric-card amber"><text>待接任务</text><strong>{{pending}}</strong><small>请及时确认</small></view>
+    <view class="metric-card green"><text>执行中</text><strong>{{active}}</strong><small>继续现场检测</small></view>
+  </view>
+  <view class="card rule-card">
+    <view class="rule-mark">随</view>
+    <view><text class="card-title">随机抽样须知</text><text class="muted">到达现场后再开始抽样。结果生成后不可重复抽取，异常情况请联系管理员。</text></view>
+  </view>
+  <button class="primary" bindtap="openTasks">查看我的任务</button>
+</view>
+

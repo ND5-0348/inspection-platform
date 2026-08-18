@@ -1,0 +1,32 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/tasks/tasks",
+    "pages/task-detail/task-detail",
+    "pages/inspection/inspection",
+    "pages/sample/sample"
+  ],
+  "window": {
+    "navigationBarTitleText": "抽检云台",
+    "navigationBarBackgroundColor": "#103c43",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f2f5f3"
+  },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于核验抽样员是否到达检测现场并保存签到位置"
+    }
+  },
+  "requiredPrivateInfos": ["getLocation"],
+  "tabBar": {
+    "color": "#849598",
+    "selectedColor": "#1d6668",
+    "backgroundColor": "#ffffff",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "工作台" },
+      { "pagePath": "pages/tasks/tasks", "text": "任务" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,14 @@
+node_modules/
+.npm-cache/
+dist/
+work/
+.env
+.env.local
+coverage/
+data/
+*.tsbuildinfo
+project.private.config.json
+.DS_Store
+*.log
+.idea/
+.vscode/

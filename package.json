@@ -1,0 +1,20 @@
+{
+  "name": "inspection-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/admin-web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c cyan,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace @inspection/api",
+    "dev:web": "npm run dev --workspace @inspection/admin-web",
+    "start:local": "concurrently -n API,WEB -c cyan,green \"node apps/api/dist/server.js\" \"node tools/static-server.mjs\"",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

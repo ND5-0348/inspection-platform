@@ -1,0 +1,39 @@
+<view class="page" wx:if="{{task}}">
+  <view class="header-card">
+    <text class="eyebrow">{{task.taskNo}}</text>
+    <text class="title">{{order.receivingUnit || order.customerName}}</text>
+    <text class="order-no">采购订单 {{order.orderNo}}</text>
+    <text class="status">{{task.status === 'PENDING_ACCEPTANCE' ? '待接单' : task.status === 'IN_PROGRESS' ? '执行中' : '已接单'}}</text>
+  </view>
+  <view class="card detail-list">
+    <view><text>质检类型</text><strong>{{order.inspectionType || '-'}}</strong></view>
+    <view><text>供应商</text><strong>{{order.supplierName || '-'}}</strong></view>
+    <view><text>现场地址</text><strong>{{order.siteAddress}}</strong></view>
+    <view><text>联系人</text><strong>{{order.contactName || '-'}} {{order.contactPhone || ''}}</strong></view>
+    <view><text>原计划人员</text><strong>{{order.sourceSampler || '-'}}</strong></view>
+    <view><text>原检查状态</text><strong>{{order.sourceStatus || '-'}}</strong></view>
+    <view><text>产品范围</text><strong>{{order.items.length}} 项 / 计划抽样 {{sampleTotal}} 件</strong></view>
+    <view><text>计划时间</text><strong>{{order.plannedAt}}</strong></view>
+    <view><text>备注</text><strong>{{order.sourceRemarks || '-'}}</strong></view>
+  </view>
+  <view class="card material-list">
+    <text class="card-title">周计划物资明细</text>
+    <view class="material" wx:for="{{order.items}}" wx:key="id">
+      <view class="material-head"><strong>{{item.productName}}</strong><text>抽 {{item.sampleQuantity || item.quantity}} 件</text></view>
+      <text>物资编码：{{item.productCode}}</text>
+      <text>订单行项：{{item.orderLineId || '-'}}</text>
+      <text>规格型号：{{item.specification || '-'}}</text>
+      <text>完成样品：{{item.completedSampleQuantity || 0}} 件 · 状态：{{item.sourceStatus || '-'}}</text>
+      <text wx:if="{{item.remark}}">备注：{{item.remark}}</text>
+    </view>
+  </view>
+  <view class="card steps">
+    <text class="card-title">现场执行步骤</text>
+    <view><i>1</i><text>到达现场并确认任务信息</text></view>
+    <view><i>2</i><text>完成定位签到</text></view>
+    <view><i>3</i><text>系统随机抽取待检产品</text></view>
+    <view><i>4</i><text>填写结果并上传现场证据</text></view>
+  </view>
+  <button wx:if="{{task.status === 'PENDING_ACCEPTANCE'}}" class="primary" bindtap="accept">确认接单</button>
+  <button wx:else class="primary secondary" bindtap="startSample">进入现场执行</button>
+</view>

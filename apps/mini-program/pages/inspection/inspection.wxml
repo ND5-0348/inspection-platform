@@ -1,0 +1,48 @@
+<view class="page" wx:if="{{task}}">
+  <view class="progress-card">
+    <text class="eyebrow">{{task.taskNo}}</text><text class="title">{{task.order.customerName}}</text>
+    <view class="steps"><text class="{{task.checkInPhoto ? 'done' : ''}}">1 图片签到</text><text class="{{task.physicalSample ? 'done' : ''}}">2 抽样</text><text class="{{task.physicalSample && task.samplePhotoCompleteCount === task.physicalSample.positions.length ? 'done' : ''}}">3 逐样取证</text><text class="{{task.status === 'PENDING_REVIEW' || task.status === 'COMPLETED' ? 'done' : ''}}">4 审核</text></view>
+  </view>
+
+  <view wx:if="{{!task.checkInPhoto}}" class="card action-card"><text class="card-title">{{task.checkIn ? '补拍签到照片' : '现场图片签到'}}</text><text class="muted">到达检测地点后拍摄现场照片，系统同时保存坐标、精度和签到时间。</text><button class="primary" loading="{{actionBusy}}" bindtap="checkIn">拍照并签到</button></view>
+  <view wx:else class="completion"><text>✓ 图片签到已完成</text><small>{{task.checkInPhoto.fileName}} · {{task.checkIn.latitude}}, {{task.checkIn.longitude}}</small></view>
+
+  <view wx:if="{{task.checkIn && !task.physicalSample}}" class="card">
+    <text class="card-title">托盘—箱—件三级随机抽样</text><text class="muted block">单托盘货物的托盘数填写1。输入现场包装数量后，系统随机确定具体位置。</text>
+    <label>产品批次<picker range="{{productNames}}" value="{{productIndex}}" bindchange="changeProduct"><view class="picker">{{productNames[productIndex]}}</view></picker></label>
+    <view class="selected-material" wx:if="{{selectedItem}}">
+      <strong>{{selectedItem.productName}}</strong>
+      <text>物资编码 {{selectedItem.productCode}} · 订单行项 {{selectedItem.orderLineId || '-'}}</text>
+      <text>规格 {{selectedItem.specification || '-'}} · 周计划抽样 {{selectedItem.sampleQuantity || selectedItem.quantity}} 件</text>
+    </view>
+    <view class="number-grid">
+      <label>托盘数<input type="number" value="{{palletCount}}" data-field="palletCount" bindinput="updateNumber" /></label>
+      <label>每托盘箱数<input type="number" value="{{boxesPerPallet}}" data-field="boxesPerPallet" bindinput="updateNumber" /></label>
+      <label>每箱件数<input type="number" value="{{itemsPerBox}}" data-field="itemsPerBox" bindinput="updateNumber" /></label>
+      <label>抽取件数<input type="number" value="{{sampleCount}}" data-field="sampleCount" bindinput="updateNumber" /></label>
+    </view>
+    <view class="candidate">候选总数 <strong>{{candidateTotal}}</strong> 件</view>
+    <button class="primary secondary" loading="{{actionBusy}}" bindtap="drawSample">生成随机位置</button>
+  </view>
+
+  <view wx:if="{{task.physicalSample}}" class="card">
+    <text class="card-title">抽样位置已锁定</text><text class="muted block">{{task.physicalSample.productName}} · {{task.physicalSample.batchNo}} · 共{{task.physicalSample.candidateTotal}}件抽{{task.physicalSample.sampleCount}}件</text>
+    <view class="position" wx:for="{{task.physicalSample.positions}}" wx:key="sequence"><text>{{index + 1}}</text><view><strong>第 {{item.palletNo}} 托盘</strong><small>第 {{item.boxNo}} 箱 · 第 {{item.itemNo}} 件</small></view></view>
+  </view>
+
+  <view wx:if="{{task.physicalSample && task.status !== 'PENDING_REVIEW' && task.status !== 'COMPLETED'}}" class="card">
+    <view class="evidence-head"><text class="card-title">现场照片</text><button size="mini" bindtap="takePhoto" loading="{{actionBusy}}">拍照上传</button></view>
+    <text wx:if="{{task.inspectionEvidenceFiles.length === 0}}" class="muted block">至少拍摄并上传1张检测现场照片。</text>
+    <view class="file" wx:for="{{task.inspectionEvidenceFiles}}" wx:key="id"><text>{{item.fileName}}</text><small>{{item.size}} 字节</small></view>
+  </view>
+
+  <view wx:if="{{task.physicalSample && task.status !== 'PENDING_REVIEW' && task.status !== 'COMPLETED'}}" class="card">
+    <text class="card-title">逐样品照片与检测结论</text>
+    <text class="muted block">每个随机样品至少拍1张、最多5张；照片会写入样品编号、地址、坐标、定位精度和拍摄时间。</text>
+    <view class="result-row" wx:for="{{resultRows}}" wx:key="key"><view><strong>第{{item.palletNo}}托 / 第{{item.boxNo}}箱 / 第{{item.itemNo}}件</strong><small>{{item.key}} · 已拍{{item.photoCount}}张</small></view><view class="sample-photo-list"><image wx:for="{{item.photos}}" wx:for-item="photo" wx:key="id" wx:if="{{photo.previewUrl}}" src="{{photo.previewUrl}}" mode="aspectFill"></image><button size="mini" data-key="{{item.key}}" bindtap="takeSamplePhoto" loading="{{actionBusy}}" disabled="{{item.photoCount >= 5}}">拍摄样品</button></view><picker range="{{conclusionLabels}}" value="{{item.valueIndex}}" data-index="{{index}}" bindchange="changeConclusion"><view class="picker small">{{conclusionLabels[item.valueIndex]}}</view></picker><input placeholder="备注" value="{{item.note}}" data-index="{{index}}" bindinput="changeNote" /></view>
+    <view class="button-row"><button bindtap="saveResultTap" loading="{{actionBusy}}">保存结果</button><button class="primary secondary" bindtap="submitReview" loading="{{actionBusy}}">提交审核</button></view>
+  </view>
+
+  <view wx:if="{{task.status === 'PENDING_REVIEW'}}" class="waiting"><strong>已提交审核</strong><text>现场记录和抽样位置已经锁定，请等待管理员处理。</text></view>
+  <view wx:if="{{task.status === 'COMPLETED'}}" class="waiting complete"><strong>审核已完成</strong><text>本次检测记录已完成归档。</text></view>
+</view>

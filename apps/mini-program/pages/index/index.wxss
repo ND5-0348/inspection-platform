@@ -1,0 +1,11 @@
+.welcome { margin: 12rpx 0 34rpx; padding: 36rpx 32rpx; border-radius: 24rpx; background: linear-gradient(135deg, #123f45, #256a6b); color: #fff; }
+.eyebrow { display: block; color: #dced83; font-size: 20rpx; letter-spacing: 3rpx; }
+.title { display: block; margin: 18rpx 0 12rpx; font-size: 42rpx; font-weight: 800; }
+.subtitle { color: #c6dbd9; font-size: 25rpx; line-height: 1.7; }
+.metric-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20rpx; margin-bottom: 22rpx; }
+.metric-card { position: relative; padding: 27rpx; border-radius: 20rpx; background: #fff; overflow: hidden; }
+.metric-card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 7rpx; background: #d5ae4f; }
+.metric-card.green::before { background: #499176; }
+.metric-card text { color: #71888b; font-size: 23rpx; }.metric-card strong { display: block; margin: 9rpx 0; font-size: 48rpx; }.metric-card small { color: #a0afb0; font-size: 20rpx; }
+.rule-card { display: flex; gap: 22rpx; align-items: flex-start; }.rule-mark { display: grid; place-items: center; flex: 0 0 64rpx; height: 64rpx; border-radius: 16rpx; background: #e7f29e; color: #18474a; font-weight: 800; }.card-title { display: block; margin-bottom: 9rpx; font-size: 28rpx; font-weight: 800; }.rule-card .muted { display: block; line-height: 1.65; }
+

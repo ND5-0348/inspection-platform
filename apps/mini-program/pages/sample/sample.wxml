@@ -1,0 +1,11 @@
+<view class="page" wx:if="{{detail}}">
+  <view class="sample-hero"><text>候选产品</text><strong>{{detail.order.items.length}}</strong><small>系统将从锁定清单中不重复抽取</small></view>
+  <view class="card"><text class="label">抽样数量</text><slider min="1" max="{{detail.order.items.length}}" value="{{count}}" show-value activeColor="#1d6668" bindchange="changeCount" /></view>
+  <view wx:if="{{result.length === 0}}" class="warning"><strong>开始前请确认</strong><text>现场清单与系统一致；当前网络稳定；抽样结果一经生成将进入审计记录。</text></view>
+  <button wx:if="{{result.length === 0}}" class="primary secondary" loading="{{drawing}}" disabled="{{drawing}}" bindtap="draw">立即随机抽取</button>
+  <view wx:else>
+    <view class="result-title"><text>抽样结果</text><small>共 {{result.length}} 项</small></view>
+    <view class="card result" wx:for="{{result}}" wx:key="id"><text class="index">{{index + 1}}</text><view><strong>{{item.productName}}</strong><text>{{item.productCode}} · 批次 {{item.batchNo}}</text></view></view>
+  </view>
+</view>
+
