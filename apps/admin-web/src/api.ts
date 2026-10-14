@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:3300/api/v1";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 const TOKEN_KEY = "inspection.session.token";
 
 export type InspectionConclusion = "PASS" | "FAIL" | "NA";
@@ -127,7 +127,7 @@ export interface SiteCheckIn {
 
 export interface EvidenceFile {
   id: string;
-  purpose: "CHECK_IN" | "INSPECTION" | "SAMPLE";
+  purpose: "CHECK_IN" | "GOODS" | "INSPECTION" | "SAMPLE";
   sampleKey?: string;
   fileName: string;
   mimeType: string;
@@ -147,7 +147,7 @@ export interface EvidenceFile {
 
 export interface ResolvedLocation {
   address: string;
-  provider: "BAIDU" | "AMAP" | "ORDER_ADDRESS";
+  provider: "BAIDU" | "AMAP" | "OSM" | "ORDER_ADDRESS";
   coordinateSystem: "WGS84";
 }
 
@@ -201,13 +201,30 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
   return data as T;
 }
 
-async function uploadCheckIn<T>(taskId: string, file: File, location: { latitude: number; longitude: number; accuracy: number; address?: string }): Promise<T> {
+type CheckInLocation = {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  address: string;
+  coordinateSystem: "WGS84";
+  mapProvider: "BAIDU" | "AMAP" | "OSM" | "ORDER_ADDRESS";
+  capturedAt: string;
+  watermarkText: string;
+  watermarkVersion: string;
+};
+
+async function uploadCheckIn<T>(taskId: string, file: File, location: CheckInLocation): Promise<T> {
   const query = new URLSearchParams({
     latitude: String(location.latitude),
     longitude: String(location.longitude),
     accuracy: String(location.accuracy),
+    address: location.address,
+    coordinateSystem: location.coordinateSystem,
+    mapProvider: location.mapProvider,
+    capturedAt: location.capturedAt,
+    watermarkText: location.watermarkText,
+    watermarkVersion: location.watermarkVersion,
   });
-  if (location.address) query.set("address", location.address);
   const body = new FormData();
   body.append("photo", file);
   const response = await fetch(`${API_BASE}/tasks/${taskId}/photo-check-in?${query}`, {
@@ -291,7 +308,7 @@ export const api = {
   createOrder: (payload: unknown) => request<InspectionOrder>("/orders", { method: "POST", body: JSON.stringify(payload) }),
   importOrders: (file: File) => uploadExcel<ExcelImportSummary>("/orders/import", file),
   deleteOrder: (id: string) => request<{ orderId: string; orderNo: string; message: string }>(`/orders/${id}`, { method: "DELETE" }),
-  dispatch: (id: string) => request(`/orders/${id}/dispatch`, { method: "POST", body: "{}" }),
+  dispatch: (id: string, candidateIds?: string[]) => request<{ assigneeId: string; assigneeName: string }>(`/orders/${id}/dispatch`, { method: "POST", body: JSON.stringify({ candidateIds }) }),
   tasks: () => request<InspectionTask[]>("/tasks"),
   task: (id: string) => request<InspectionTask>(`/tasks/${id}`),
   acceptTask: (id: string) => request<InspectionTask>(`/tasks/${id}/accept`, {
@@ -302,13 +319,14 @@ export const api = {
   }),
   physicalSample: (id: string, payload: { orderItemId: string; palletCount: number; boxesPerPallet: number; itemsPerBox: number; sampleCount: number }) =>
     request<InspectionTask>(`/tasks/${id}/physical-sample`, { method: "POST", body: JSON.stringify(payload), headers: { "X-Client-Channel": "WEB" } }),
-  photoCheckIn: (id: string, file: File, location: { latitude: number; longitude: number; accuracy: number; address?: string }) =>
+  photoCheckIn: (id: string, file: File, location: CheckInLocation) =>
     uploadCheckIn<InspectionTask>(id, file, location),
   reverseGeocode: (latitude: number, longitude: number, fallbackAddress: string) =>
     request<ResolvedLocation>(`/maps/reverse-geocode?${new URLSearchParams({ latitude: String(latitude), longitude: String(longitude), fallbackAddress })}`),
   uploadSampleEvidence,
   evidenceBlob,
   uploadEvidence: (id: string, file: File) => uploadFile<EvidenceFile>(`/tasks/${id}/evidence`, file),
+  uploadGoodsPhoto: (id: string, file: File) => uploadFile<EvidenceFile>(`/tasks/${id}/goods-evidence`, file),
   saveInspectionResults: (id: string, results: Array<{ sampleKey: string; conclusion: "PASS" | "FAIL" | "NA"; note: string }>) =>
     request<InspectionTask>(`/tasks/${id}/inspection-results`, { method: "PUT", body: JSON.stringify({ results }) }),
   submitReview: (id: string) => request<InspectionTask>(`/tasks/${id}/submit-review`, { method: "POST", body: "{}" }),

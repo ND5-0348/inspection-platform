@@ -16,6 +16,7 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
   const [actionBusy, setActionBusy] = useState(false);
   const [sampleForm, setSampleForm] = useState({ orderItemId: "", palletCount: 1, boxesPerPallet: 10, itemsPerBox: 12, sampleCount: 3 });
   const [resultDraft, setResultDraft] = useState<ResultDraft>({});
+  const [localizedCheckIn, setLocalizedCheckIn] = useState<{ evidenceId: string; address: string; provider: string }>();
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -61,33 +62,50 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
   async function photoCheckIn(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const file = input.files?.[0];
-    if (!selected || !file) return;
+    if (!selected || !file || actionBusy) return;
+    if (!window.isSecureContext) {
+      input.value = "";
+      return setMessage("局域网拍照定位签到请使用 HTTPS 地址，并先在设备上信任局域网证书。");
+    }
     if (!navigator.geolocation) {
       input.value = "";
       return setMessage("当前浏览器不支持定位，请改用微信小程序完成图片签到。");
     }
     setActionBusy(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => void (async () => {
-        try {
-          await api.photoCheckIn(selected.id, file, {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            address: selected.order.siteAddress,
-          });
-          setMessage("图片签到成功，现场照片、定位和时间已经留存。");
-          await load();
-        } catch (error) {
-          setMessage(error instanceof Error ? error.message : "图片签到失败");
-        } finally {
-          setActionBusy(false);
-          input.value = "";
-        }
-      })(),
-      () => { input.value = ""; setActionBusy(false); setMessage("未能获取定位，请允许本网站使用位置后重新拍照签到。"); },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
-    );
+    try {
+      const capturedAt = new Date().toISOString();
+      const position = await currentPosition();
+      const accuracy = position.coords.accuracy;
+      if (!Number.isFinite(accuracy) || accuracy <= 0) throw new Error("定位精度不可用，请重新定位后拍照签到。");
+      const resolved = await api.reverseGeocode(position.coords.latitude, position.coords.longitude, selected.order.siteAddress);
+      const address = resolved.address.slice(0, 240);
+      const watermarkLines = [
+        `任务 ${selected.taskNo} · 现场签到`,
+        address,
+        `WGS84 ${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)} · 精度约 ${Math.round(accuracy)} 米`,
+        `打卡时间 ${formatWatermarkTime(capturedAt)}`,
+        ...(resolved.provider === "OSM" ? ["地址数据 © OpenStreetMap contributors"] : []),
+      ];
+      const watermarkedFile = await watermarkPhoto(file, watermarkLines, "check-in");
+      await api.photoCheckIn(selected.id, watermarkedFile, {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy,
+        address,
+        coordinateSystem: "WGS84",
+        mapProvider: resolved.provider,
+        capturedAt,
+        watermarkText: watermarkLines.join("\n"),
+        watermarkVersion: "CLIENT_CANVAS_V1",
+      });
+      setMessage("图片签到成功，带时间和位置水印的照片已经保存。");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "图片签到失败");
+    } finally {
+      setActionBusy(false);
+      input.value = "";
+    }
   }
 
   async function drawPhysicalSample() {
@@ -100,6 +118,14 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
     if (!selected || !file) return;
     await runAction(() => api.uploadEvidence(selected.id, file), "现场照片上传成功。 ");
     event.target.value = "";
+  }
+
+  async function uploadGoodsPhoto(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!selected || !file || actionBusy) return;
+    await runAction(() => api.uploadGoodsPhoto(selected.id, file), "现场货物照片已保存。");
+    input.value = "";
   }
 
   async function uploadSamplePhoto(event: ChangeEvent<HTMLInputElement>, samplePositionKey: string) {
@@ -117,6 +143,7 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
         resolved.address,
         `WGS84 ${position.coords.latitude.toFixed(6)}, ${position.coords.longitude.toFixed(6)} · 精度约 ${Math.round(position.coords.accuracy)} 米`,
         `拍摄时间 ${formatWatermarkTime(capturedAt)}`,
+        ...(resolved.provider === "OSM" ? ["地址数据 © OpenStreetMap contributors"] : []),
       ];
       const watermarkedFile = await watermarkPhoto(file, watermarkLines, samplePositionKey);
       await api.uploadSampleEvidence(selected.id, watermarkedFile, {
@@ -152,7 +179,24 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
 
   const latestReview = selected?.reviewRecords.at(-1);
   const checkInPhoto = selected?.evidenceFiles.find((file) => file.purpose === "CHECK_IN");
+  useEffect(() => {
+    if (!checkInPhoto || !selected?.checkIn || checkInPhoto.mapProvider !== "ORDER_ADDRESS" || /[\u3400-\u9fff]/u.test(checkInPhoto.address || "")) {
+      setLocalizedCheckIn(undefined);
+      return;
+    }
+    let active = true;
+    setLocalizedCheckIn(undefined);
+    void api.reverseGeocode(selected.checkIn.latitude, selected.checkIn.longitude, selected.order.siteAddress)
+      .then((location) => { if (active) setLocalizedCheckIn({ evidenceId: checkInPhoto.id, address: location.address, provider: location.provider }); })
+      .catch(() => { if (active) setLocalizedCheckIn({ evidenceId: checkInPhoto.id, address: "定位地址暂未解析", provider: "ORDER_ADDRESS" }); });
+    return () => { active = false; };
+  }, [checkInPhoto?.id, checkInPhoto?.address, checkInPhoto?.mapProvider, selected?.checkIn?.latitude, selected?.checkIn?.longitude, selected?.order.siteAddress]);
+  const checkInAddress = localizedCheckIn && localizedCheckIn.evidenceId === checkInPhoto?.id ? localizedCheckIn.address :
+    checkInPhoto?.mapProvider === "ORDER_ADDRESS" && !/[\u3400-\u9fff]/u.test(checkInPhoto.address || "") ? "正在获取中文定位地址…" :
+    checkInPhoto?.address || selected?.checkIn?.address || selected?.order.siteAddress;
+  const checkInProvider = localizedCheckIn && localizedCheckIn.evidenceId === checkInPhoto?.id ? localizedCheckIn.provider : checkInPhoto?.mapProvider;
   const inspectionEvidence = selected?.evidenceFiles.filter((file) => file.purpose === "INSPECTION") ?? [];
+  const goodsEvidence = selected?.evidenceFiles.filter((file) => file.purpose === "GOODS") ?? [];
   const sampleEvidence = selected?.evidenceFiles.filter((file) => file.purpose === "SAMPLE") ?? [];
   const samplePhotoCompleteCount = selected?.physicalSample?.positions.filter((position) => sampleEvidence.some((file) => file.sampleKey === sampleKey(position.palletNo, position.boxNo, position.itemNo))).length ?? 0;
   const allSamplePhotosComplete = Boolean(selected?.physicalSample) && samplePhotoCompleteCount === selected?.physicalSample?.positions.length;
@@ -172,8 +216,10 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
         <section className="sampler-workspace">
           <aside className="task-list-panel">
             <div className="mobile-panel-title"><strong>我的任务</strong><span>{busy ? "加载中" : `${tasks.length}项`}</span></div>
-            {!busy && tasks.length === 0 && <div className="sampler-empty">暂无分配给你的任务</div>}
-            {tasks.map((task) => <button key={task.id} className={`task-list-item ${selectedId === task.id ? "selected" : ""}`} onClick={() => setSelectedId(task.id)}><span className="task-line"><strong>{task.taskNo}</strong><i>{taskStatus[task.status] ?? task.status}</i></span><b>{task.order.receivingUnit ?? task.order.customerName}</b><small>{task.order.supplierName ? `${task.order.supplierName} · ` : ""}{task.order.siteAddress}</small></button>)}
+            <div className="task-list-scroll">
+              {!busy && tasks.length === 0 && <div className="sampler-empty">暂无分配给你的任务</div>}
+              {tasks.map((task) => <button key={task.id} className={`task-list-item ${selectedId === task.id ? "selected" : ""}`} onClick={() => setSelectedId(task.id)}><span className="task-line"><strong>{task.taskNo}</strong><i>{taskStatus[task.status] ?? task.status}</i></span><b>{task.order.receivingUnit ?? task.order.customerName}</b><small>{task.order.supplierName ? `${task.order.supplierName} · ` : ""}{task.order.siteAddress}</small></button>)}
+            </div>
           </aside>
 
           <section className="task-detail-panel">
@@ -188,9 +234,14 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
 
               {selected.status === "PENDING_ACCEPTANCE" && <WorkflowCard step="01" title="确认接单" text="接单后才能进行现场图片签到和随机抽样。"><button disabled={actionBusy} className="primary-button" onClick={() => void runAction(() => api.acceptTask(selected.id), "接单成功，请拍摄现场照片完成签到。")}>确认接单</button></WorkflowCard>}
 
-              {["ACCEPTED", "IN_PROGRESS"].includes(selected.status) && !checkInPhoto && <WorkflowCard step="02" title={selected.checkIn ? "补拍签到照片" : "现场图片签到"} text="使用手机现场拍照，系统会同时获取定位并保存照片、坐标、精度和签到时间。"><label className={`primary-button photo-checkin-button ${actionBusy ? "disabled" : ""}`}>{actionBusy ? "正在提交…" : selected.checkIn ? "补拍签到照片" : "拍照并签到"}<input disabled={actionBusy} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void photoCheckIn(event)} /></label></WorkflowCard>}
-              {selected.checkIn && checkInPhoto && <div className="photo-checkin-strip"><EvidenceImage evidenceId={checkInPhoto.id} alt="现场签到照片" /><div><span>✓ 图片签到已完成</span><strong>{selected.checkIn.latitude.toFixed(5)}, {selected.checkIn.longitude.toFixed(5)}</strong><small>{checkInPhoto.fileName} · 精度约 {Math.round(selected.checkIn.accuracy)} 米 · {formatDate(selected.checkIn.checkedAt)}</small></div></div>}
+              {["ACCEPTED", "IN_PROGRESS"].includes(selected.status) && !checkInPhoto && <WorkflowCard step="02" title={selected.checkIn ? "补拍签到照片" : "现场图片签到"} text="在现场拍照并允许定位；照片会写入任务、位置、精度和拍摄时间水印。"><label className={`primary-button photo-checkin-button ${actionBusy ? "disabled" : ""}`}>{actionBusy ? "正在处理照片…" : selected.checkIn ? "补拍签到照片" : "拍照并签到"}<input disabled={actionBusy} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void photoCheckIn(event)} /></label></WorkflowCard>}
+              {selected.checkIn && checkInPhoto && <div className="photo-checkin-strip"><EvidenceImage evidenceId={checkInPhoto.id} alt="现场签到照片" /><div><span>✓ 图片签到已完成</span><strong>{checkInAddress}</strong><small>{checkInPhoto.coordinateSystem || "坐标"} {selected.checkIn.latitude.toFixed(6)}, {selected.checkIn.longitude.toFixed(6)} · 精度约 {Math.round(selected.checkIn.accuracy)} 米</small><small>{checkInPhoto.fileName} · {formatDate(checkInPhoto.capturedAt || selected.checkIn.checkedAt)}</small>{checkInProvider === "ORDER_ADDRESS" && <small>定位地址未解析，显示检测单地址</small>}{checkInProvider === "OSM" && <small>地址数据 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></small>}</div></div>}
               {selected.checkIn && !checkInPhoto && !["ACCEPTED", "IN_PROGRESS"].includes(selected.status) && <div className="completion-strip legacy"><span>历史定位签到</span><strong>{selected.checkIn.latitude.toFixed(5)}, {selected.checkIn.longitude.toFixed(5)}</strong><small>该历史任务未采集签到照片 · {formatDate(selected.checkIn.checkedAt)}</small></div>}
+
+              {(["ACCEPTED", "IN_PROGRESS"].includes(selected.status) || goodsEvidence.length > 0) && <section className="field-records goods-records">
+                <div className="section-heading"><div><p className="eyebrow">GOODS PHOTOS</p><h3>现场货物照片</h3><p className="section-note">接单后即可拍摄货物，保存照片不需要定位权限。已保存 {goodsEvidence.length} 张。</p></div>{["ACCEPTED", "IN_PROGRESS"].includes(selected.status) && <label className={`upload-button ${actionBusy ? "disabled" : ""}`}>拍摄货物<input disabled={actionBusy} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void uploadGoodsPhoto(event)} /></label>}</div>
+                {goodsEvidence.length > 0 && <div className="goods-photo-gallery">{goodsEvidence.map((file) => <figure key={file.id}><EvidenceImage evidenceId={file.id} alt={`${selected.taskNo}现场货物照片`} /><figcaption>{file.fileName}<small>{formatDate(file.uploadedAt)} · {formatSize(file.size)}</small></figcaption></figure>)}</div>}
+              </section>}
 
               {selected.checkIn && !selected.physicalSample && ["ACCEPTED", "IN_PROGRESS"].includes(selected.status) && <section className="physical-sample-card">
                 <div className="section-heading"><div><p className="eyebrow">HIERARCHICAL RANDOM SAMPLING</p><h3>托盘—箱—件三级随机抽样</h3></div><span>候选 {candidateTotal.toLocaleString()} 件</span></div>
@@ -216,7 +267,7 @@ export function SamplerPortal({ user, onLogout }: { user: AuthUser; onLogout: ()
                 {inspectionEvidence.length > 0 && <div className="evidence-list">{inspectionEvidence.map((file) => <article key={file.id}><strong>{file.fileName}</strong><small>补充现场照片 · {formatSize(file.size)} · SHA256 {file.sha256.slice(0, 12)}…</small></article>)}</div>}
                 <div className="result-form">{selected.physicalSample.positions.map((position) => {
                   const key = sampleKey(position.palletNo, position.boxNo, position.itemNo); const draft = resultDraft[key] ?? { conclusion: "", note: "" }; const photos = sampleEvidence.filter((file) => file.sampleKey === key);
-                  return <article key={key}><div><strong>第{position.palletNo}托盘 / 第{position.boxNo}箱 / 第{position.itemNo}件</strong><small>{key}</small></div><select aria-label={`${key}检测结论`} value={draft.conclusion} onChange={(event) => setResultDraft({ ...resultDraft, [key]: { ...draft, conclusion: event.target.value as InspectionConclusion } })}><option value="">选择结论</option><option value="PASS">合格</option><option value="FAIL">不合格</option><option value="NA">不适用</option></select><input aria-label={`${key}备注`} value={draft.note} onChange={(event) => setResultDraft({ ...resultDraft, [key]: { ...draft, note: event.target.value } })} placeholder="备注（可选）" /><div className="sample-photo-record"><div className="sample-photo-thumbs">{photos.map((photo) => <EvidenceImage key={photo.id} evidenceId={photo.id} alt={`${key}样品照片`} />)}</div><label className={`sample-photo-button ${actionBusy || photos.length >= 5 ? "disabled" : ""}`}>{photos.length ? `继续拍照 ${photos.length}/5` : "拍照留证"}<input aria-label={`${key}样品照片`} disabled={actionBusy || photos.length >= 5} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void uploadSamplePhoto(event, key)} /></label>{photos[0]?.address && <small>{photos[0].address} · {photos[0].mapProvider}</small>}</div></article>})}</div>
+                  return <article key={key}><div><strong>第{position.palletNo}托盘 / 第{position.boxNo}箱 / 第{position.itemNo}件</strong><small>{key}</small></div><select aria-label={`${key}检测结论`} value={draft.conclusion} onChange={(event) => setResultDraft({ ...resultDraft, [key]: { ...draft, conclusion: event.target.value as InspectionConclusion } })}><option value="">选择结论</option><option value="PASS">合格</option><option value="FAIL">不合格</option><option value="NA">不适用</option></select><input aria-label={`${key}备注`} value={draft.note} onChange={(event) => setResultDraft({ ...resultDraft, [key]: { ...draft, note: event.target.value } })} placeholder="备注（可选）" /><div className="sample-photo-record"><div className="sample-photo-thumbs">{photos.map((photo) => <EvidenceImage key={photo.id} evidenceId={photo.id} alt={`${key}样品照片`} />)}</div><label className={`sample-photo-button ${actionBusy || photos.length >= 5 ? "disabled" : ""}`}>{photos.length ? `继续拍照 ${photos.length}/5` : "拍照留证"}<input aria-label={`${key}样品照片`} disabled={actionBusy || photos.length >= 5} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => void uploadSamplePhoto(event, key)} /></label>{photos[0]?.address && <small>{photos[0].address} · {photos[0].mapProvider === "OSM" ? "OpenStreetMap" : photos[0].mapProvider === "AMAP" ? "高德地图" : photos[0].mapProvider === "BAIDU" ? "百度地图" : "订单地址"}</small>}{photos[0]?.mapProvider === "OSM" && <small>地址数据 <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a></small>}</div></article>})}</div>
                 <div className="record-actions"><button className="ghost-button" disabled={actionBusy} onClick={() => void saveResults()}>保存检测结果</button><button className="primary-button" disabled={actionBusy || !allResultsComplete || !allSamplePhotosComplete || !checkInPhoto} onClick={() => void runAction(() => api.submitReview(selected.id), "任务已提交管理员审核。")}>提交审核</button></div>
               </section>}
 
@@ -242,7 +293,7 @@ export function EvidenceImage({ evidenceId, alt }: { evidenceId: string; alt: st
     }).catch(() => setSource(""));
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
   }, [evidenceId]);
-  return source ? <img src={source} alt={alt} /> : <div className="photo-placeholder" aria-label={`${alt}加载中`}>图片</div>;
+  return source ? <a className="evidence-image-link" href={source} target="_blank" rel="noopener noreferrer" title="点击查看照片原图"><img src={source} alt={alt} /></a> : <div className="photo-placeholder" aria-label={`${alt}加载中`}>图片</div>;
 }
 
 function WorkflowCard({ step, title, text, children }: { step: string; title: string; text: string; children: React.ReactNode }) {
@@ -259,7 +310,10 @@ function formatSize(size: number) { return size < 1024 * 1024 ? `${Math.ceil(siz
 function formatWatermarkTime(value: string) { return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(value)); }
 
 function currentPosition(): Promise<GeolocationPosition> {
-  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("未能获取定位，请允许本网站使用位置后重新拍照。")), { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }));
+  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, (error) => {
+    const message = error.code === 1 ? "请允许本网站使用位置后重新拍照。" : error.code === 3 ? "定位超时，请移至开阔处重试。" : "未能获取定位，请检查设备定位服务后重试。";
+    reject(new Error(message));
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }));
 }
 
 async function watermarkPhoto(file: File, lines: string[], samplePositionKey: string): Promise<File> {

@@ -1,7 +1,9 @@
-import "dotenv/config";
 import { buildApp } from "./app.js";
 import { initializeMySqlPersistence } from "./persistence/mysql-persistence.js";
+import { loadRuntimeEnvironment } from "./runtime-config.js";
 import { store } from "./store/memory-store.js";
+
+loadRuntimeEnvironment();
 
 const dataDriver = process.env.DATA_DRIVER ?? "memory";
 let databaseName: string | undefined;

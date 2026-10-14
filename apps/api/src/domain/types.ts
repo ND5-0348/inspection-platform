@@ -114,7 +114,7 @@ export interface SiteCheckIn {
 export interface EvidenceFile {
   id: string;
   taskId: string;
-  purpose: "CHECK_IN" | "INSPECTION" | "SAMPLE";
+  purpose: "CHECK_IN" | "GOODS" | "INSPECTION" | "SAMPLE";
   sampleKey?: string;
   fileName: string;
   mimeType: string;

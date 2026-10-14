@@ -271,12 +271,24 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (!order) return reply.code(404).send({ message: "检测单不存在" });
     if (order.status !== "PENDING_DISPATCH") return reply.code(409).send({ message: "当前状态不能重复派发" });
 
-    const candidates = store.users.filter((candidate) =>
+    const selection = z.object({
+      candidateIds: z.array(z.string().min(1)).min(1).max(500)
+        .refine((ids) => new Set(ids).size === ids.length, "候选人员不能重复").optional(),
+    }).strict().safeParse(request.body ?? {});
+    if (!selection.success) return reply.code(400).send({ message: "请选择至少1名候选人员，且名单不能重复或超过500人", issues: selection.error.issues });
+    const { candidateIds } = selection.data;
+    const eligible = store.users.filter((candidate) =>
       candidate.role === "SAMPLER" &&
       candidate.status === "ACTIVE" &&
       candidate.qualifications.includes(order.productCategory) &&
       candidate.activeTaskCount < 5,
     );
+    if (candidateIds && candidateIds.some((id) => !eligible.some((candidate) => candidate.id === id))) {
+      return reply.code(409).send({ message: "所选人员中有人不存在、已休假或停用、资质不符或任务已达上限，请重新选择人员" });
+    }
+    const candidates = candidateIds ? eligible.filter((candidate) => candidateIds.includes(candidate.id)) : eligible;
+    if (candidates.length === 0) return reply.code(409).send({ message: "没有符合条件的可分配人员" });
+    const assignmentMode = candidateIds ? (candidateIds.length === 1 ? "DIRECT" : "SELECTED_RANDOM") : "ALL_RANDOM";
     const result = weightedPick(candidates);
     const assignee = result.selected[0]!;
     const task: InspectionTask = {
@@ -291,13 +303,18 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     };
     store.tasks.unshift(task);
     store.randomAudits.unshift({
-      id: randomUUID(), type: "ASSIGNMENT", subjectId: order.id, ruleVersion: "assignment-v1",
+      id: randomUUID(), type: "ASSIGNMENT", subjectId: order.id, ruleVersion: "assignment-v2",
       candidateHash: result.candidateHash, candidateCount: candidates.length,
       selectedIds: [assignee.id], createdAt: new Date().toISOString(),
     });
     order.status = "DISPATCHED";
+    store.log(user.id, assignmentMode === "DIRECT" ? "TASK_DIRECTLY_ASSIGNED" : "TASK_RANDOMLY_ASSIGNED", "TASK", task.id, {
+      assigneeId: assignee.id, candidateCount: candidates.length, assignmentMode,
+      requestedCandidateIds: candidateIds ?? null,
+      candidates: candidates.map((candidate) => ({ id: candidate.id, name: candidate.name, employeeNo: candidate.employeeNo, activeTaskCount: candidate.activeTaskCount, weight: Math.max(1, 10 - candidate.activeTaskCount * 2) })),
+      ruleVersion: "assignment-v2",
+    });
     assignee.activeTaskCount += 1;
-    store.log(user.id, "TASK_RANDOMLY_ASSIGNED", "TASK", task.id, { assigneeId: assignee.id, candidateCount: candidates.length });
     await store.persist();
     return reply.code(201).send(task);
   });
@@ -437,6 +454,11 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       longitude: z.coerce.number().min(-180).max(180),
       accuracy: z.coerce.number().min(0).max(10000),
       address: z.string().trim().max(240).optional(),
+      coordinateSystem: z.enum(["WGS84"]).optional(),
+      mapProvider: z.enum(["BAIDU", "AMAP", "OSM", "ORDER_ADDRESS"]).optional(),
+      capturedAt: z.iso.datetime().optional(),
+      watermarkText: z.string().min(10).max(1000).optional(),
+      watermarkVersion: z.string().trim().min(1).max(64).optional(),
     }).parse(request.query);
     const task = store.tasks.find((item) => item.id === taskId);
     if (!task) return reply.code(404).send({ message: "任务不存在" });
@@ -446,10 +468,23 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     if (task.evidenceFiles?.some((file) => file.purpose === "CHECK_IN")) return reply.code(409).send({ message: "该任务已经完成图片签到" });
     const part = await request.file();
     if (!part) return reply.code(400).send({ message: "请拍摄或选择现场签到照片" });
-    const evidence = await saveEvidenceFile(part, task.id, user.id, "CHECK_IN");
+    const evidence = await saveEvidenceFile(part, task.id, user.id, "CHECK_IN", {
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracy: input.accuracy,
+      address: input.address,
+      coordinateSystem: input.coordinateSystem,
+      mapProvider: input.mapProvider,
+      capturedAt: input.capturedAt,
+      watermarkText: input.watermarkText,
+      watermarkVersion: input.watermarkVersion,
+    });
     task.evidenceFiles = [...(task.evidenceFiles ?? []), evidence];
     task.checkIn = {
-      ...input,
+      latitude: input.latitude,
+      longitude: input.longitude,
+      accuracy: input.accuracy,
+      address: input.address,
       channel: String(request.headers["x-client-channel"] ?? "WEB"),
       checkedAt: new Date().toISOString(),
     };
@@ -483,6 +518,25 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(evidence);
   });
 
+  app.post("/tasks/:taskId/goods-evidence", async (request, reply) => {
+    const user = requireUser(request, reply, ["SAMPLER"]);
+    if (!user) return;
+    const { taskId } = z.object({ taskId: z.string().min(1) }).parse(request.params);
+    const task = store.tasks.find((item) => item.id === taskId);
+    if (!task) return reply.code(404).send({ message: "任务不存在" });
+    if (task.assigneeId !== user.id) return reply.code(403).send({ message: "不能操作其他抽样员的任务" });
+    if (!["ACCEPTED", "IN_PROGRESS"].includes(task.status)) return reply.code(409).send({ message: "当前任务状态不能上传货物照片" });
+    const part = await request.file();
+    if (!part) return reply.code(400).send({ message: "请拍摄或选择现场货物照片" });
+    const evidence = await saveEvidenceFile(part, task.id, user.id, "GOODS");
+    task.evidenceFiles = [...(task.evidenceFiles ?? []), evidence];
+    store.log(user.id, "GOODS_PHOTO_UPLOADED", "TASK", task.id, {
+      evidenceId: evidence.id, fileName: evidence.fileName, size: evidence.size, sha256: evidence.sha256,
+    });
+    await store.persist();
+    return reply.code(201).send(evidence);
+  });
+
   app.post("/tasks/:taskId/sample-evidence", async (request, reply) => {
     const user = requireUser(request, reply, ["SAMPLER"]);
     if (!user) return;
@@ -494,7 +548,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
       accuracy: z.coerce.number().min(0).max(10000),
       address: z.string().trim().min(1).max(500),
       coordinateSystem: z.enum(["WGS84"]).default("WGS84"),
-      mapProvider: z.enum(["BAIDU", "AMAP", "ORDER_ADDRESS"]).default("ORDER_ADDRESS"),
+      mapProvider: z.enum(["BAIDU", "AMAP", "OSM", "ORDER_ADDRESS"]).default("ORDER_ADDRESS"),
       capturedAt: z.iso.datetime(),
       watermarkText: z.string().min(10).max(1000),
       watermarkVersion: z.string().trim().min(1).max(64).default("CLIENT_CANVAS_V1"),

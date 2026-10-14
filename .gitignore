@@ -5,6 +5,7 @@ work/
 .env
 .env.local
 coverage/
+.test-tmp/
 data/
 *.tsbuildinfo
 project.private.config.json

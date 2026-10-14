@@ -1,7 +1,10 @@
 const api = require("../../utils/api");
 
 function positionKey(position) { return `P${position.palletNo}-B${position.boxNo}-I${position.itemNo}`; }
-function getLocation() { return new Promise((resolve, reject) => wx.getLocation({ type: "wgs84", isHighAccuracy: true, success: resolve, fail: reject })); }
+function getLocation() { return new Promise((resolve, reject) => wx.getLocation({
+  type: "wgs84", isHighAccuracy: true, success: resolve,
+  fail(error) { reject(new Error(/auth|permission|deny/i.test(error.errMsg || "") ? "请在小程序设置中开启定位权限后重试" : "定位失败，请移至开阔处重试")); }
+})); }
 function chooseCameraPhoto() { return new Promise((resolve, reject) => wx.chooseMedia({ count: 1, mediaType: ["image"], sourceType: ["camera"], sizeType: ["compressed"], success: resolve, fail: reject })); }
 function pad(value) { return String(value).padStart(2, "0"); }
 function formatWatermarkTime(iso) { const date = new Date(iso); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`; }
@@ -60,7 +63,23 @@ Page({
       });
       const productNames = task.order.items.map((item) => `${item.productName} · ${item.productCode} · 抽${item.sampleQuantity || item.quantity}件`);
       task.checkInPhoto = (task.evidenceFiles || []).find((file) => file.purpose === "CHECK_IN") || null;
+      if (task.checkInPhoto) {
+        try { task.checkInPhoto.previewUrl = await api.downloadEvidence(task.checkInPhoto.id); }
+        catch { task.checkInPhoto.previewUrl = ""; }
+        if (task.checkIn && task.checkInPhoto.mapProvider === "ORDER_ADDRESS" && !/[\u3400-\u9fff]/.test(task.checkInPhoto.address || "")) {
+          try {
+            const localized = await api.reverseGeocode(task.checkIn.latitude, task.checkIn.longitude, task.order.siteAddress);
+            task.checkInPhoto.displayAddress = localized.address;
+            task.checkInPhoto.displayProvider = localized.provider;
+          } catch { task.checkInPhoto.displayAddress = "定位地址暂未解析"; }
+        }
+      }
+      if (task.checkIn) task.checkIn.displayTime = formatWatermarkTime(task.checkInPhoto?.capturedAt || task.checkIn.checkedAt);
       task.inspectionEvidenceFiles = (task.evidenceFiles || []).filter((file) => file.purpose === "INSPECTION");
+      task.goodsPhotos = (task.evidenceFiles || []).filter((file) => file.purpose === "GOODS");
+      await Promise.all(task.goodsPhotos.map(async (file) => {
+        try { file.previewUrl = await api.downloadEvidence(file.id); } catch { file.previewUrl = ""; }
+      }));
       task.samplePhotoCompleteCount = resultRows.filter((row) => row.photoCount > 0).length;
       this.setData({ task, resultRows, productNames, selectedItem: task.order.items[this.data.productIndex] || null, loading: false });
     } catch (error) { wx.showToast({ title: error.message || "加载失败", icon: "none" }); }
@@ -77,14 +96,36 @@ Page({
     this.setData({ productIndex, selectedItem: this.data.task.order.items[productIndex] });
   },
   async checkIn() {
+    if (this.data.actionBusy) return;
     this.setData({ actionBusy: true });
     try {
-      const media = await new Promise((resolve, reject) => wx.chooseMedia({ count: 1, mediaType: ["image"], sourceType: ["camera"], sizeType: ["compressed"], success: resolve, fail: reject }));
-      const location = await new Promise((resolve, reject) => wx.getLocation({ type: "gcj02", isHighAccuracy: true, success: resolve, fail: reject }));
-      await api.photoCheckIn(this.data.id, media.tempFiles[0].tempFilePath, { latitude: location.latitude, longitude: location.longitude, accuracy: location.accuracy || 0, address: this.data.task.order.siteAddress });
+      const media = await chooseCameraPhoto();
+      const capturedAt = new Date().toISOString();
+      const location = await getLocation();
+      const accuracy = Number(location.accuracy);
+      if (!Number.isFinite(accuracy) || accuracy <= 0) throw new Error("定位精度不可用，请开启精确定位后重试");
+      const resolved = await api.reverseGeocode(location.latitude, location.longitude, this.data.task.order.siteAddress);
+      const address = resolved.address.slice(0, 240);
+      const lines = [
+        `任务 ${this.data.task.taskNo} · 现场签到`,
+        address,
+        `WGS84 ${Number(location.latitude).toFixed(6)}, ${Number(location.longitude).toFixed(6)} · 精度约 ${Math.round(accuracy)}米`,
+        `打卡时间 ${formatWatermarkTime(capturedAt)}`,
+        ...(resolved.provider === "OSM" ? ["地址数据 © OpenStreetMap contributors"] : [])
+      ];
+      const outputPath = await watermarkedPhoto(media.tempFiles[0].tempFilePath, lines);
+      await api.photoCheckIn(this.data.id, outputPath, {
+        latitude: location.latitude, longitude: location.longitude, accuracy, address,
+        coordinateSystem: "WGS84", mapProvider: resolved.provider, capturedAt,
+        watermarkText: lines.join("\n"), watermarkVersion: "MINI_OFFSCREEN_CANVAS_V1"
+      });
       wx.showToast({ title: "图片签到成功" }); await this.load();
-    } catch (error) { wx.showToast({ title: error.message || "图片签到失败", icon: "none" }); }
+    } catch (error) { if (!/cancel/i.test(error.errMsg || "")) wx.showToast({ title: error.message || "图片签到失败", icon: "none" }); }
     finally { this.setData({ actionBusy: false }); }
+  },
+  previewCheckInPhoto() {
+    const url = this.data.task?.checkInPhoto?.previewUrl;
+    if (url) wx.previewImage({ urls: [url], current: url });
   },
   async drawSample() {
     const confirmed = await new Promise((resolve) => wx.showModal({ title: "确认三级随机抽样", content: `现场候选共${this.data.candidateTotal}件，结果生成后不能重抽。`, success: (res) => resolve(res.confirm) }));
@@ -127,6 +168,23 @@ Page({
     } catch (error) { wx.showToast({ title: error.message || "上传失败", icon: "none" }); }
     finally { this.setData({ actionBusy: false }); }
   },
+  async takeGoodsPhoto() {
+    if (this.data.actionBusy) return;
+    this.setData({ actionBusy: true });
+    try {
+      const media = await chooseCameraPhoto();
+      await api.uploadGoodsPhoto(this.data.id, media.tempFiles[0].tempFilePath);
+      wx.showToast({ title: "货物照片已保存" });
+      await this.load();
+    } catch (error) { if (!/cancel/i.test(error.errMsg || "")) wx.showToast({ title: error.message || "货物照片保存失败", icon: "none" }); }
+    finally { this.setData({ actionBusy: false }); }
+  },
+  previewGoodsPhoto(event) {
+    const photos = this.data.task?.goodsPhotos || [];
+    const current = photos[Number(event.currentTarget.dataset.index)]?.previewUrl;
+    const urls = photos.map((photo) => photo.previewUrl).filter(Boolean);
+    if (current) wx.previewImage({ urls, current });
+  },
   async takeSamplePhoto(event) {
     const sampleKey = event.currentTarget.dataset.key;
     const row = this.data.resultRows.find((item) => item.key === sampleKey);
@@ -139,7 +197,8 @@ Page({
         `任务 ${this.data.task.taskNo} · 样品 ${sampleKey}`,
         resolved.address,
         `WGS84 ${Number(location.latitude).toFixed(6)}, ${Number(location.longitude).toFixed(6)} · 精度约 ${Math.round(location.accuracy || 0)}米`,
-        `拍摄时间 ${formatWatermarkTime(capturedAt)}`
+        `拍摄时间 ${formatWatermarkTime(capturedAt)}`,
+        ...(resolved.provider === "OSM" ? ["地址数据 © OpenStreetMap contributors"] : [])
       ];
       const outputPath = await watermarkedPhoto(media.tempFiles[0].tempFilePath, lines);
       await api.uploadSampleEvidence(this.data.id, outputPath, {

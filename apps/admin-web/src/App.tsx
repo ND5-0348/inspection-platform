@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useState } from "react";
 import { api, type AuthUser, type Dashboard, type InspectionOrder, type InspectionTask, type SamplerUser } from "./api";
 import { LoginPage } from "./LoginPage";
+import { DispatchDialog } from "./DispatchDialog";
 import { EvidenceImage, SamplerPortal } from "./SamplerPortal";
 
 const statusLabel: Record<string, string> = {
@@ -58,6 +59,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   const [statusTarget, setStatusTarget] = useState<SamplerUser>();
   const [deleteOrderTarget, setDeleteOrderTarget] = useState<InspectionOrder>();
   const [selectedOrder, setSelectedOrder] = useState<InspectionOrder>();
+  const [dispatchTarget, setDispatchTarget] = useState<InspectionOrder>();
   const [importBusy, setImportBusy] = useState(false);
   const [form, setForm] = useState(initialForm);
   const [samplerForm, setSamplerForm] = useState(initialSamplerForm);
@@ -80,13 +82,12 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   useEffect(() => { void load(); }, [load]);
 
   async function dispatch(order: InspectionOrder) {
-    if (!window.confirm(`确认按规则随机派发检测单 ${order.orderNo}？`)) return;
     try {
-      await api.dispatch(order.id);
-      setMessage("随机派发成功，系统已保存候选范围和随机结果。");
-      await load();
+      const users = await api.users();
+      setSamplers(users.filter((person) => person.role === "SAMPLER"));
+      setDispatchTarget(order);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "派发失败");
+      setMessage(error instanceof Error ? error.message : "获取候选人员失败");
     }
   }
 
@@ -282,14 +283,14 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
               <tbody>
                 {!busy && orders.length === 0 && <tr><td colSpan={8} className="empty">暂无检测单</td></tr>}
                 {orders.map((order) => <tr key={order.id}>
-                  <td><strong className="order-no">{order.orderNo}</strong></td>
-                  <td>{order.inspectionType ?? order.productCategory}</td>
-                  <td><strong>{order.receivingUnit ?? order.customerName}</strong><small className="address">{order.supplierName ?? "—"}</small></td>
-                  <td><strong>{order.contactName || "—"} {order.contactPhone || ""}</strong><small className="address">{order.siteAddress}</small></td>
-                  <td>{new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(order.plannedAt))}</td>
-                  <td>{order.items.reduce((sum, item) => sum + (item.sampleQuantity ?? item.quantity), 0)}件 / {order.items.length}项</td>
-                  <td><span className={`status status-${order.status.toLowerCase()}`}>{statusLabel[order.status] ?? order.status}</span></td>
-                  <td><div className="row-actions"><button className="ghost-button" onClick={() => setSelectedOrder(order)}>查看</button>{order.status === "PENDING_DISPATCH" && <><button className="action-button" onClick={() => void dispatch(order)}>随机派发</button><button className="danger-button" onClick={() => setDeleteOrderTarget(order)}>删除</button></>}</div></td>
+                  <td data-label="采购订单号"><strong className="order-no">{order.orderNo}</strong></td>
+                  <td data-label="质检类型">{order.inspectionType ?? order.productCategory}</td>
+                  <td data-label="收货单位"><strong>{order.receivingUnit ?? order.customerName}</strong><small className="address">{order.supplierName ?? "—"}</small></td>
+                  <td data-label="联系人 / 地址"><strong>{order.contactName || "—"} {order.contactPhone || ""}</strong><small className="address">{order.siteAddress}</small></td>
+                  <td data-label="计划日期">{new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(order.plannedAt))}</td>
+                  <td data-label="抽样样品数">{order.items.reduce((sum, item) => sum + (item.sampleQuantity ?? item.quantity), 0)}件 / {order.items.length}项</td>
+                  <td data-label="状态"><span className={`status status-${order.status.toLowerCase()}`}>{statusLabel[order.status] ?? order.status}</span></td>
+                  <td data-label="操作"><div className="row-actions"><button className="ghost-button" onClick={() => setSelectedOrder(order)}>查看</button>{order.status === "PENDING_DISPATCH" && <><button className="action-button" onClick={() => void dispatch(order)}>选择人员派发</button><button className="danger-button" onClick={() => setDeleteOrderTarget(order)}>删除</button></>}</div></td>
                 </tr>)}
               </tbody>
             </table>
@@ -304,13 +305,13 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
               <tbody>
                 {samplers.length === 0 && <tr><td colSpan={7} className="empty">暂无抽检员账号</td></tr>}
                 {samplers.map((sampler) => <tr key={sampler.id}>
-                  <td><strong>{sampler.employeeNo}</strong><small className="address">{sampler.name}</small></td>
-                  <td>{sampler.department}</td>
-                  <td>{sampler.mobile}</td>
-                  <td><div className="qualification-list">{sampler.qualifications.map((item) => <span key={item}>{item}</span>)}</div></td>
-                  <td>{sampler.activeTaskCount}</td>
-                  <td><span className={`status user-status-${sampler.status.toLowerCase()}`}>{sampler.status === "ACTIVE" ? "启用" : sampler.status === "ON_LEAVE" ? "休假" : "已停用"}</span></td>
-                  <td><div className="row-actions"><button className="ghost-button" disabled={sampler.status === "INACTIVE"} onClick={() => setStatusTarget(sampler)}>{sampler.status === "ON_LEAVE" ? "恢复启用" : "设为休假"}</button><button className="ghost-button" disabled={sampler.status === "INACTIVE"} onClick={() => { setPasswordInput("Sampler@123"); setPasswordTarget(sampler); }}>初始化密码</button><button className="danger-button" disabled={sampler.status === "INACTIVE"} onClick={() => setDeleteTarget(sampler)}>删除账号</button></div></td>
+                  <td data-label="工号 / 姓名"><strong>{sampler.employeeNo}</strong><small className="address">{sampler.name}</small></td>
+                  <td data-label="部门">{sampler.department}</td>
+                  <td data-label="联系方式">{sampler.mobile}</td>
+                  <td data-label="检测资质"><div className="qualification-list">{sampler.qualifications.map((item) => <span key={item}>{item}</span>)}</div></td>
+                  <td data-label="未完任务">{sampler.activeTaskCount}</td>
+                  <td data-label="状态"><span className={`status user-status-${sampler.status.toLowerCase()}`}>{sampler.status === "ACTIVE" ? "启用" : sampler.status === "ON_LEAVE" ? "休假" : "已停用"}</span></td>
+                  <td data-label="操作"><div className="row-actions"><button className="ghost-button" disabled={sampler.status === "INACTIVE"} onClick={() => setStatusTarget(sampler)}>{sampler.status === "ON_LEAVE" ? "恢复启用" : "设为休假"}</button><button className="ghost-button" disabled={sampler.status === "INACTIVE"} onClick={() => { setPasswordInput("Sampler@123"); setPasswordTarget(sampler); }}>初始化密码</button><button className="danger-button" disabled={sampler.status === "INACTIVE"} onClick={() => setDeleteTarget(sampler)}>删除账号</button></div></td>
                 </tr>)}
               </tbody>
             </table>
@@ -320,13 +321,19 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
         <section className="table-panel review-panel anchor-panel" id="review-panel">
           <div className="panel-heading"><div><h2>审核中心</h2><p>核对三级抽样位置、图片签到、检测结论和证据文件</p></div><span className="review-count">待审核 {reviewTasks.length}</span></div>
           {reviewTasks.length === 0 ? <div className="review-empty">暂无待审核任务</div> : reviewTasks.map((task) => <article className="review-item" key={task.id}>
-            <div><strong>{task.taskNo} · {task.order.customerName}</strong><small>{task.assigneeName} · {task.order.siteAddress}</small>{task.evidenceFiles.filter((file) => file.purpose === "CHECK_IN").slice(0, 1).map((file) => <div className="review-checkin-photo" key={file.id}><EvidenceImage evidenceId={file.id} alt={`${task.taskNo}签到照片`} /><span>签到照片</span></div>)}</div>
-            <div><div className="review-facts"><span>抽样位置 <b>{task.physicalSample?.sampleCount ?? 0}</b></span><span>检测结论 <b>{task.inspectionResults.length}</b></span><span>样品照片 <b>{task.evidenceFiles.filter((file) => file.purpose === "SAMPLE").length}</b></span><span>图片签到 <b>{task.evidenceFiles.some((file) => file.purpose === "CHECK_IN") ? "已完成" : "缺失"}</b></span></div><div className="review-sample-gallery">{task.evidenceFiles.filter((file) => file.purpose === "SAMPLE").map((file) => <figure key={file.id}><EvidenceImage evidenceId={file.id} alt={`${file.sampleKey}样品照片`} /><figcaption>{file.sampleKey}<small>{file.address || "现场地址"}</small></figcaption></figure>)}</div></div>
+            <div><strong>{task.taskNo} · {task.order.customerName}</strong><small>{task.assigneeName} · {task.order.siteAddress}</small>{task.evidenceFiles.filter((file) => file.purpose === "CHECK_IN").slice(0, 1).map((file) => <div className="review-checkin-photo" key={file.id}><EvidenceImage evidenceId={file.id} alt={`${task.taskNo}签到照片`} /><span>签到照片<small>{new Date(file.capturedAt || task.checkIn?.checkedAt || file.uploadedAt).toLocaleString("zh-CN")} · 精度约 {Math.round(file.accuracy ?? task.checkIn?.accuracy ?? 0)} 米</small><small>{file.address || task.checkIn?.address || task.order.siteAddress}</small></span></div>)}</div>
+            <div><div className="review-facts"><span>抽样位置 <b>{task.physicalSample?.sampleCount ?? 0}</b></span><span>检测结论 <b>{task.inspectionResults.length}</b></span><span>货物照片 <b>{task.evidenceFiles.filter((file) => file.purpose === "GOODS").length}</b></span><span>样品照片 <b>{task.evidenceFiles.filter((file) => file.purpose === "SAMPLE").length}</b></span><span>图片签到 <b>{task.evidenceFiles.some((file) => file.purpose === "CHECK_IN") ? "已完成" : "缺失"}</b></span></div><div className="review-sample-gallery">{task.evidenceFiles.filter((file) => file.purpose === "GOODS").map((file) => <figure key={file.id}><EvidenceImage evidenceId={file.id} alt="现场货物照片" /><figcaption>现场货物<small>{file.fileName}</small></figcaption></figure>)}{task.evidenceFiles.filter((file) => file.purpose === "SAMPLE").map((file) => <figure key={file.id}><EvidenceImage evidenceId={file.id} alt={`${file.sampleKey}样品照片`} /><figcaption>{file.sampleKey}<small>{file.address || "现场地址"}</small></figcaption></figure>)}</div></div>
             <div className="review-actions"><button className="ghost-button" onClick={() => void reviewTask(task, "RETURN")}>退回修改</button><button className="action-button" onClick={() => void reviewTask(task, "APPROVE")}>审核通过</button></div>
           </article>)}
         </section>
       </main>
 
+      {dispatchTarget && <DispatchDialog key={dispatchTarget.id} order={dispatchTarget} samplers={samplers} onClose={() => setDispatchTarget(undefined)} onConfirm={async (candidateIds) => {
+        const result = await api.dispatch(dispatchTarget.id, candidateIds);
+        setDispatchTarget(undefined);
+        setMessage(`派发成功：${result.assigneeName}。已保存派单范围和操作记录。`);
+        await load();
+      }} />}
       {showForm && <div className="modal-backdrop" role="presentation" onMouseDown={() => setShowForm(false)}>
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="create-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="modal-heading"><div><p className="eyebrow">NEW ORDER</p><h2 id="create-title">新建检测单</h2></div><button onClick={() => setShowForm(false)} aria-label="关闭">×</button></div>

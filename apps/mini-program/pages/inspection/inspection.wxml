@@ -4,8 +4,14 @@
     <view class="steps"><text class="{{task.checkInPhoto ? 'done' : ''}}">1 图片签到</text><text class="{{task.physicalSample ? 'done' : ''}}">2 抽样</text><text class="{{task.physicalSample && task.samplePhotoCompleteCount === task.physicalSample.positions.length ? 'done' : ''}}">3 逐样取证</text><text class="{{task.status === 'PENDING_REVIEW' || task.status === 'COMPLETED' ? 'done' : ''}}">4 审核</text></view>
   </view>
 
-  <view wx:if="{{!task.checkInPhoto}}" class="card action-card"><text class="card-title">{{task.checkIn ? '补拍签到照片' : '现场图片签到'}}</text><text class="muted">到达检测地点后拍摄现场照片，系统同时保存坐标、精度和签到时间。</text><button class="primary" loading="{{actionBusy}}" bindtap="checkIn">拍照并签到</button></view>
-  <view wx:else class="completion"><text>✓ 图片签到已完成</text><small>{{task.checkInPhoto.fileName}} · {{task.checkIn.latitude}}, {{task.checkIn.longitude}}</small></view>
+  <view wx:if="{{!task.checkInPhoto}}" class="card action-card"><text class="card-title">{{task.checkIn ? '补拍签到照片' : '现场图片签到'}}</text><text class="muted">在现场拍照并允许精确定位；照片会写入任务、位置、精度和打卡时间水印。</text><button class="primary" loading="{{actionBusy}}" disabled="{{actionBusy}}" bindtap="checkIn">拍照并签到</button></view>
+  <view wx:else class="completion"><image wx:if="{{task.checkInPhoto.previewUrl}}" src="{{task.checkInPhoto.previewUrl}}" mode="aspectFill" bindtap="previewCheckInPhoto" /><view><text>✓ 图片签到已完成</text><small>{{task.checkInPhoto.displayAddress || task.checkInPhoto.address || task.checkIn.address || task.order.siteAddress}}</small><small>{{task.checkInPhoto.coordinateSystem || '坐标'}} {{task.checkIn.latitude}}, {{task.checkIn.longitude}} · 精度约 {{task.checkIn.accuracy}} 米</small><small>打卡时间 {{task.checkIn.displayTime}}</small><small wx:if="{{task.checkInPhoto.displayProvider === 'OSM' || task.checkInPhoto.mapProvider === 'OSM'}}">地址数据 © OpenStreetMap contributors</small><small wx:if="{{task.checkInPhoto.previewUrl}}">点击照片可放大查看</small></view></view>
+
+  <view wx:if="{{task.status === 'ACCEPTED' || task.status === 'IN_PROGRESS' || task.goodsPhotos.length}}" class="card">
+    <view class="evidence-head"><text class="card-title">现场货物照片</text><button wx:if="{{task.status === 'ACCEPTED' || task.status === 'IN_PROGRESS'}}" size="mini" bindtap="takeGoodsPhoto" loading="{{actionBusy}}" disabled="{{actionBusy}}">拍摄货物</button></view>
+    <text class="muted block">货物拍摄不需要定位。已保存 {{task.goodsPhotos.length}} 张。</text>
+    <view class="goods-gallery"><image wx:for="{{task.goodsPhotos}}" wx:for-item="photo" wx:key="id" wx:if="{{photo.previewUrl}}" src="{{photo.previewUrl}}" mode="aspectFill" data-index="{{index}}" bindtap="previewGoodsPhoto" /></view>
+  </view>
 
   <view wx:if="{{task.checkIn && !task.physicalSample}}" class="card">
     <text class="card-title">托盘—箱—件三级随机抽样</text><text class="muted block">单托盘货物的托盘数填写1。输入现场包装数量后，系统随机确定具体位置。</text>

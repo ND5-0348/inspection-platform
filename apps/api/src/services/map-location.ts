@@ -1,19 +1,53 @@
 export interface ResolvedLocation {
   address: string;
-  provider: "BAIDU" | "AMAP" | "ORDER_ADDRESS";
+  provider: "BAIDU" | "AMAP" | "OSM" | "ORDER_ADDRESS";
   coordinateSystem: "WGS84";
 }
 
-async function getJson(url: URL): Promise<any> {
+async function getJson(url: URL, headers?: Record<string, string>): Promise<any> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, headers });
     if (!response.ok) throw new Error(`地图服务返回 ${response.status}`);
     return response.json();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// All users of this LAN deployment share one upstream limit. Cache nearby repeat
+// lookups and serialize cache misses to stay below Nominatim's 1 request/second cap.
+const osmCache = new Map<string, { address: string; expiresAt: number }>();
+let osmQueue: Promise<void> = Promise.resolve();
+let nextOsmRequestAt = 0;
+
+async function reverseWithOsm(latitude: number, longitude: number): Promise<string> {
+  const key = `${latitude.toFixed(5)},${longitude.toFixed(5)}`;
+  const cached = osmCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.address;
+  const task = osmQueue.then(async () => {
+    const queuedCache = osmCache.get(key);
+    if (queuedCache && queuedCache.expiresAt > Date.now()) return queuedCache.address;
+    const delay = Math.max(0, nextOsmRequestAt - Date.now());
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    nextOsmRequestAt = Date.now() + 1100;
+    const url = new URL(process.env.OSM_REVERSE_URL || "https://nominatim.openstreetmap.org/reverse");
+    url.search = new URLSearchParams({
+      format: "jsonv2", lat: latitude.toFixed(7), lon: longitude.toFixed(7),
+      zoom: "18", "accept-language": "zh-CN,zh;q=0.9", addressdetails: "1",
+    }).toString();
+    const data = await getJson(url, {
+      "User-Agent": "InspectionPlatformLAN/0.1 (on-demand photo check-in; local deployment)",
+      "Accept-Language": "zh-CN,zh;q=0.9",
+    });
+    const address = String(data.display_name || "").trim();
+    if (!address || !/[\u3400-\u9fff]/u.test(address)) throw new Error("未取得中文地址");
+    osmCache.set(key, { address, expiresAt: Date.now() + 24 * 60 * 60 * 1000 });
+    return address;
+  });
+  osmQueue = task.then(() => undefined, () => undefined);
+  return task;
 }
 
 async function reverseWithBaidu(latitude: number, longitude: number, key: string): Promise<string> {
@@ -56,8 +90,12 @@ export async function resolveLocation(latitude: number, longitude: number, fallb
     if (provider === "amap" && process.env.AMAP_WEB_SERVICE_KEY) {
       return { address: await reverseWithAmap(latitude, longitude, process.env.AMAP_WEB_SERVICE_KEY), provider: "AMAP", coordinateSystem: "WGS84" };
     }
+    if (provider === "osm") {
+      return { address: await reverseWithOsm(latitude, longitude), provider: "OSM", coordinateSystem: "WGS84" };
+    }
   } catch {
     // 地图服务超时或配额异常时仍允许现场作业，保留原始坐标并回退到检测地址。
   }
-  return { address: fallbackAddress || "现场地址待解析", provider: "ORDER_ADDRESS", coordinateSystem: "WGS84" };
+  const address = /[\u3400-\u9fff]/u.test(fallbackAddress) ? fallbackAddress : "定位地址暂未解析";
+  return { address, provider: "ORDER_ADDRESS", coordinateSystem: "WGS84" };
 }

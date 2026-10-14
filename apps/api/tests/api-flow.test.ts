@@ -51,18 +51,57 @@ describe("complete inspection flow", () => {
     const acceptResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/accept`, payload: {}, headers: samplerHeaders });
     expect(acceptResponse.json().status).toBe("ACCEPTED");
 
+    // Goods photos can be saved immediately after accepting a task, without a
+    // check-in or any location fields, and are readable during review.
+    const goodsBoundary = "----inspection-goods-boundary";
+    const goodsBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const goodsBody = Buffer.concat([
+      Buffer.from(`--${goodsBoundary}\r\nContent-Disposition: form-data; name="evidence"; filename="现场货物.png"\r\nContent-Type: image/png\r\n\r\n`),
+      goodsBytes,
+      Buffer.from(`\r\n--${goodsBoundary}--\r\n`),
+    ]);
+    const goodsResponse = await app.inject({
+      method: "POST", url: `/api/v1/tasks/${task.id}/goods-evidence`,
+      headers: { ...samplerHeaders, "content-type": `multipart/form-data; boundary=${goodsBoundary}` }, payload: goodsBody,
+    });
+    expect(goodsResponse.statusCode).toBe(201);
+    const goodsPhoto = goodsResponse.json();
+    expect(goodsPhoto).toMatchObject({ purpose: "GOODS", mimeType: "image/png", size: goodsBytes.length });
+    expect(goodsPhoto).not.toHaveProperty("latitude");
+    expect(goodsPhoto).not.toHaveProperty("longitude");
+    expect(goodsPhoto).not.toHaveProperty("address");
+    const savedGoods = await app.inject({ method: "GET", url: `/api/v1/evidence/${goodsPhoto.id}`, headers: adminHeaders });
+    expect(savedGoods.statusCode).toBe(200);
+    expect(savedGoods.rawPayload).toEqual(goodsBytes);
+    const taskWithGoods = await app.inject({ method: "GET", url: `/api/v1/tasks/${task.id}`, headers: samplerHeaders });
+    expect(taskWithGoods.json().evidenceFiles).toContainEqual(expect.objectContaining({ id: goodsPhoto.id, purpose: "GOODS" }));
+
     const checkInBoundary = "----inspection-check-in-boundary";
     const checkInBody = Buffer.concat([
       Buffer.from(`--${checkInBoundary}\r\nContent-Disposition: form-data; name="photo"; filename="签到照片.png"\r\nContent-Type: image/png\r\n\r\n`),
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
       Buffer.from(`\r\n--${checkInBoundary}--\r\n`),
     ]);
-    const checkInQuery = new URLSearchParams({ latitude: "31.2304", longitude: "121.4737", accuracy: "18", address: order.siteAddress });
+    const checkInCapturedAt = new Date().toISOString();
+    const checkInQuery = new URLSearchParams({
+      latitude: "31.2304", longitude: "121.4737", accuracy: "18", address: order.siteAddress,
+      coordinateSystem: "WGS84", mapProvider: "ORDER_ADDRESS", capturedAt: checkInCapturedAt,
+      watermarkText: `任务 ${task.taskNo} · 现场签到\n${order.siteAddress}\nWGS84 31.230400, 121.473700\n打卡时间 ${checkInCapturedAt}`,
+      watermarkVersion: "CLIENT_CANVAS_V1",
+    });
     const checkInResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/photo-check-in?${checkInQuery}`, headers: {
       ...samplerHeaders, "content-type": `multipart/form-data; boundary=${checkInBoundary}`,
     }, payload: checkInBody });
     expect(checkInResponse.statusCode).toBe(200);
+    expect(checkInResponse.json().evidenceFiles.find((file: { purpose: string }) => file.purpose === "CHECK_IN")).toMatchObject({
+      coordinateSystem: "WGS84", mapProvider: "ORDER_ADDRESS", capturedAt: checkInCapturedAt,
+      latitude: 31.2304, longitude: 121.4737, accuracy: 18, watermarkVersion: "CLIENT_CANVAS_V1",
+    });
     expect(checkInResponse.json().evidenceFiles.find((file: { purpose: string }) => file.purpose === "CHECK_IN").sha256).toHaveLength(64);
+    const duplicateCheckIn = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/photo-check-in?${checkInQuery}`, headers: {
+      ...samplerHeaders, "content-type": `multipart/form-data; boundary=${checkInBoundary}`,
+    }, payload: checkInBody });
+    expect(duplicateCheckIn.statusCode).toBe(409);
 
     const physicalSampleResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/physical-sample`, headers: samplerHeaders, payload: {
       orderItemId: order.items[0].id, palletCount: 2, boxesPerPallet: 3, itemsPerBox: 4, sampleCount: 3,
@@ -127,12 +166,27 @@ describe("complete inspection flow", () => {
 
     const submitResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/submit-review`, headers: samplerHeaders, payload: {} });
     expect(submitResponse.json().status).toBe("PENDING_REVIEW");
+    const lateGoodsResponse = await app.inject({
+      method: "POST", url: `/api/v1/tasks/${task.id}/goods-evidence`,
+      headers: { ...samplerHeaders, "content-type": `multipart/form-data; boundary=${goodsBoundary}` }, payload: goodsBody,
+    });
+    expect(lateGoodsResponse.statusCode).toBe(409);
+
+    const returnResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/review`, headers: adminHeaders, payload: {
+      decision: "RETURN", comment: "请复核现场货物照片",
+    } });
+    expect(returnResponse.statusCode).toBe(200);
+    expect(returnResponse.json().status).toBe("IN_PROGRESS");
+    expect(returnResponse.json().evidenceFiles).toContainEqual(expect.objectContaining({ id: goodsPhoto.id, purpose: "GOODS" }));
+    const resubmitResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/submit-review`, headers: samplerHeaders, payload: {} });
+    expect(resubmitResponse.json().status).toBe("PENDING_REVIEW");
 
     const reviewResponse = await app.inject({ method: "POST", url: `/api/v1/tasks/${task.id}/review`, headers: adminHeaders, payload: {
       decision: "APPROVE", comment: "三级抽样位置、检测结论和现场证据完整",
     } });
     expect(reviewResponse.statusCode).toBe(200);
     expect(reviewResponse.json().status).toBe("COMPLETED");
+    expect(reviewResponse.json().evidenceFiles).toContainEqual(expect.objectContaining({ id: goodsPhoto.id, purpose: "GOODS" }));
 
     const forbiddenOrders = await app.inject({ method: "GET", url: "/api/v1/orders", headers: samplerHeaders });
     expect(forbiddenOrders.statusCode).toBe(403);

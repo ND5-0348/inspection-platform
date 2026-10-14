@@ -49,12 +49,12 @@ function request(path, options = {}) {
   });
 }
 
-function uploadEvidence(taskId, filePath) {
+function uploadEvidence(taskId, filePath, endpoint = "evidence") {
   return ensureSession().then((token) => {
     const app = getApp();
     return new Promise((resolve, reject) => {
       wx.uploadFile({
-        url: `${app.globalData.apiBaseUrl}/tasks/${taskId}/evidence`,
+        url: `${app.globalData.apiBaseUrl}/tasks/${taskId}/${endpoint}`,
         filePath,
         name: "evidence",
         header: { "authorization": `Bearer ${token}`, "x-client-channel": "MINI_PROGRAM" },
@@ -72,7 +72,7 @@ function uploadEvidence(taskId, filePath) {
 function photoCheckIn(taskId, filePath, location) {
   return ensureSession().then((token) => {
     const app = getApp();
-    const query = `latitude=${encodeURIComponent(location.latitude)}&longitude=${encodeURIComponent(location.longitude)}&accuracy=${encodeURIComponent(location.accuracy || 0)}&address=${encodeURIComponent(location.address || "")}`;
+    const query = Object.keys(location).map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(location[key])}`).join("&");
     return new Promise((resolve, reject) => {
       wx.uploadFile({
         url: `${app.globalData.apiBaseUrl}/tasks/${taskId}/photo-check-in?${query}`,
@@ -135,6 +135,7 @@ module.exports = {
   physicalSample: (id, data) => request(`/tasks/${id}/physical-sample`, { method: "POST", data }),
   photoCheckIn,
   uploadEvidence,
+  uploadGoodsPhoto: (taskId, filePath) => uploadEvidence(taskId, filePath, "goods-evidence"),
   uploadSampleEvidence,
   downloadEvidence,
   reverseGeocode: (latitude, longitude, fallbackAddress) => request(`/maps/reverse-geocode?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}&fallbackAddress=${encodeURIComponent(fallbackAddress || "")}`),
