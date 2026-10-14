@@ -1,6 +1,6 @@
 # 抽检云台：现阶段交接
 
-更新日期：2026-10-09。本文依据当前工作区、运行服务、自动测试及本轮用户手机反馈整理。交接对象是**这台 Windows 电脑上的工作区、MySQL 数据库、照片文件和局域网证书**；仅克隆 Git 仓库不能还原当前状态。
+更新日期：2026-10-14。本文依据当前工作区、运行服务、自动测试及用户手机反馈整理。交接对象是**这台 Windows 电脑上的工作区、MySQL 数据库、照片文件和局域网证书**；仅克隆 Git 仓库不能还原当前状态。下方服务端口和业务数据数量仍是 2026-10-09 的运行快照。
 
 ## 一、当前结论
 
@@ -13,9 +13,9 @@
 | 项目 | 当前值 |
 |---|---|
 | 项目根目录 | `E:\project\inspection-platform` |
-| Git 分支／最后提交 | `main`／`789963a Initial inspection platform implementation` |
+| Git 分支 | `main`，2026-10-14 已推送至 `origin/main`；最新提交以 `git log -1` 为准 |
 | Git 远端 | `https://github.com/ND5-0348/inspection-platform` |
-| 代码状态 | 有大量未提交修改及未跟踪文件；不要重置工作区 |
+| 代码状态 | 2026-10-14 同步后工作区干净；后续修改前先运行 `git status --short` |
 | Node／npm | 24.14.0／11.9.0 |
 | 数据库 | 本机 MySQL `localhost:3306`，`inspection_platform_dev` |
 | API | `127.0.0.1:3300`，当前 PID 25528 |
@@ -65,7 +65,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\start-lan.ps1
 
 ## 六、验证记录
 
-- 2026-10-09：`npm.cmd test`，6 个测试文件、29 项通过。
+- 2026-10-14：`npm.cmd test`，6 个测试文件、29 项通过；`npm.cmd run build` 通过。
 - `npm.cmd run build`：API TypeScript 和网页 TypeScript／Vite 构建通过；小程序相关 JS 经 `node --check` 通过。
 - 完整 API 工作流测试覆盖派单、接单、无定位货物照片上传及读取、图片签到、抽样、逐样品照片、保存结果、提交审核、退回重提和通过；确认审核中不能追加货物照片。
 - 在临时独立 MySQL 库中验证 `GOODS` 元数据写入与重新加载，确认无经纬度；测试库已清理，业务库未加入测试照片。
@@ -99,7 +99,7 @@ Invoke-RestMethod 'http://127.0.0.1:3300/api/v1/health'
 
 ## 八、未完成工作与接手顺序
 
-1. **保存当前源码状态。** `git status --short` 仍显示大量修改；`HANDOVER.md`、`DispatchDialog.tsx`、`runtime-config.ts`、多项测试和两个局域网脚本仍未跟踪。最后本地提交仍是初版，不要重置或用远端覆盖本机。先审查差异，再提交和同步。
+1. **确认源码同步状态。** 2026-10-14 已将当时的源码、脚本、测试和交接文档推送到 `origin/main`；后续开发前先运行 `git status --short`、`git log -1`，确认工作区及远端基线。
 2. **备份业务库、照片和配置。** `.env`、`data/uploads`、局域网 CA 私钥、MySQL 内容不在 Git 中。移机需分别迁移；本轮没有执行正式备份和恢复演练。
 3. **真机验收新货物拍照。** 用已接单任务验证拍摄、上传、缩略图、管理员审核页及弱网重试；确认 iPhone／Android 的相机行为。正式业务库当前还没有 `GOODS` 照片。
 4. **修正小程序运行配置。** `apps/mini-program/app.js` 仍写着旧的 `http://192.168.1.25/api/v1`，与当前电脑 `192.168.1.10` 和 8443 HTTPS 入口不一致；小程序仍使用演示身份，正式微信登录与人员绑定未完成。
